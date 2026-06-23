@@ -4,8 +4,7 @@ import {
   Select, MenuItem, InputLabel, FormControl, Pagination, Box, Chip
 } from '@mui/material';
 
-// --- INTEGRATED EMBEDDED LOGGING MIDDLEWARE LAYER ---
-const CREDENTIALS = {
+const authConfig = {
   email: "pandalapraneeth.23.cse@anits.edu.in",
   name: "Pandala Praneeth",
   rollNo: "A23126510169",
@@ -14,94 +13,92 @@ const CREDENTIALS = {
   clientSecret: "nNbhSEqAQvYNsbdT"
 };
 
-async function logToEvaluationServer(level, pkg, message) {
+async function saveLogData(level, origin, msg) {
   try {
-    // 1. Fetch Fresh Handshake Token
-    const authRes = await fetch('/evaluation-service/auth', {
+    const tokenResponse = await fetch('/evaluation-service/auth', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(CREDENTIALS)
+      body: JSON.stringify(authConfig)
     });
-    const authData = await authRes.json();
+    const authPayload = await tokenResponse.json();
     
-    // 2. Transmit Cleaned Flat Log Payload (Avoids reserved keywords like 'package')
     await fetch('/evaluation-service/logs', {
       method: 'POST',
       headers: {
-        'Authorization': `Bearer ${authData.access_token}`,
+        'Authorization': `Bearer ${authPayload.access_token}`,
         'Content-Type': 'application/json'
       },
       body: JSON.stringify({
         level: level.toLowerCase(),
-        message: `[${pkg.toUpperCase()}] ${message}`,
+        message: `[${origin.toUpperCase()}] ${msg}`,
         timestamp: new Date().toISOString()
       })
     });
   } catch (err) {
-    console.warn("Local logger sync fallback tracking notice:", err.message);
+    console.warn("Fallback logging notice:", err.message);
   }
 }
 
-const WEIGHTS = { 'Placement': 3, 'Result': 2, 'Event': 1 };
+const priorityScores = { 'Placement': 3, 'Result': 2, 'Event': 1 };
 
 export default function App() {
-  const [notifications, setNotifications] = useState([]);
-  const [viewMode, setViewMode] = useState('all'); 
-  const [typeFilter, setTypeFilter] = useState('');
-  const [page, setPage] = useState(1);
-  const [viewedIds, setViewedIds] = useState(new Set());
-  const [limit, setLimit] = useState(10);
+  const [items, setItems] = useState([]);
+  const [currentTab, setCurrentTab] = useState('all'); 
+  const [selectedType, setSelectedType] = useState('');
+  const [pageIndex, setPageIndex] = useState(1);
+  const [readIds, setReadIds] = useState(new Set());
+  const [pageSize, setPageSize] = useState(10);
 
   useEffect(() => {
-    fetchNotificationStream();
-  }, [page, typeFilter, viewMode, limit]);
+    loadNotificationData();
+  }, [pageIndex, selectedType, currentTab, pageSize]);
 
-  const fetchNotificationStream = async () => {
+  const loadNotificationData = async () => {
     try {
-      await logToEvaluationServer("info", "frontend", `Inbound network update request triggered for page index: ${page}`);
+      await saveLogData("info", "frontend", `API request fired for page: ${pageIndex}`);
       
-      let url = `/evaluation-service/notifications?page=${page}&limit=${limit}`;
-      if (typeFilter) {
-        url += `&notification_type=${typeFilter}`;
+      let endpoint = `/evaluation-service/notifications?page=${pageIndex}&limit=${pageSize}`;
+      if (selectedType) {
+        endpoint += `&notification_type=${selectedType}`;
       }
 
-      const authRes = await fetch('/evaluation-service/auth', {
+      const loginRes = await fetch('/evaluation-service/auth', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(CREDENTIALS)
+        body: JSON.stringify(authConfig)
       });
-      const authData = await authRes.json();
+      const loginData = await loginRes.json();
 
-      const response = await fetch(url, {
+      const dataRes = await fetch(endpoint, {
         method: 'GET',
-        headers: { 'Authorization': `Bearer ${authData.access_token}` }
+        headers: { 'Authorization': `Bearer ${loginData.access_token}` }
       });
       
-      const data = await response.json();
-      let streamData = data.notifications || [];
+      const parsedJSON = await dataRes.json();
+      let rawList = parsedJSON.notifications || [];
 
-      if (viewMode === 'priority') {
-        streamData = streamData.sort((a, b) => {
-          const wA = WEIGHTS[a.Type] || 0;
-          const wB = WEIGHTS[b.Type] || 0;
-          if (wB !== wA) return wB - wA;
-          return new Date(b.Timestamp.replace(' ', 'T')) - new Date(a.Timestamp.replace(' ', 'T'));
+      if (currentTab === 'priority') {
+        rawList = rawList.sort((first, second) => {
+          const rankFirst = priorityScores[first.Type] || 0;
+          const rankSecond = priorityScores[second.Type] || 0;
+          if (rankSecond !== rankFirst) return rankSecond - rankFirst;
+          return new Date(second.Timestamp.replace(' ', 'T')) - new Date(first.Timestamp.replace(' ', 'T'));
         });
       }
 
-      setNotifications(streamData);
-    } catch (error) {
-      await logToEvaluationServer("error", "component", `Critical viewport engine exception caught: ${error.message}`);
+      setItems(rawList);
+    } catch (err) {
+      await saveLogData("error", "component", `Caught boundary exception: ${err.message}`);
     }
   };
 
-  const markAsRead = async (id) => {
-    setViewedIds(prev => {
-      const updated = new Set(prev);
-      updated.add(id);
-      return updated;
+  const updateReadState = async (targetId) => {
+    setReadIds(previousSet => {
+      const copySet = new Set(previousSet);
+      copySet.add(targetId);
+      return copySet;
     });
-    await logToEvaluationServer("debug", "state", `Notification pointer reference checked as viewed: ${id}`);
+    await saveLogData("debug", "state", `Notification checked: ${targetId}`);
   };
 
   return (
@@ -110,31 +107,31 @@ export default function App() {
         Campus Notification Core Dashboard
       </Typography>
       <Typography variant="body2" color="textSecondary" sx={{ mb: 4 }}>
-        Logged in Session Tracking Profile: <strong>{CREDENTIALS.rollNo}</strong>
+        Logged in Session Tracking Profile: <strong>{authConfig.rollNo}</strong>
       </Typography>
 
       <Box sx={{ display: 'flex', gap: 2, mb: 4, flexWrap: 'wrap', alignItems: 'center' }}>
         <Button 
-          variant={viewMode === 'all' ? 'contained' : 'outlined'} 
-          onClick={() => setViewMode('all')}
+          variant={currentTab === 'all' ? 'contained' : 'outlined'} 
+          onClick={() => setCurrentTab('all')}
           sx={{ borderRadius: '8px', textTransform: 'none', fontWeight: 'bold' }}
         >
           Standard Feed view
         </Button>
         <Button 
-          variant={viewMode === 'priority' ? 'contained' : 'outlined'} 
+          variant={currentTab === 'priority' ? 'contained' : 'outlined'} 
           color="secondary" 
-          onClick={() => setViewMode('priority')}
+          onClick={() => setCurrentTab('priority')}
           sx={{ borderRadius: '8px', textTransform: 'none', fontWeight: 'bold' }}
         >
-          🚨 Critical Priority Inbox
+           Critical Priority Inbox
         </Button>
 
         <FormControl size="small" sx={{ minWidth: 160 }}>
           <InputLabel>Filter Category</InputLabel>
           <Select 
-            value={typeFilter} 
-            onChange={(e) => { setTypeFilter(e.target.value); setPage(1); }} 
+            value={selectedType} 
+            onChange={(e) => { setSelectedType(e.target.value); setPageIndex(1); }} 
             label="Filter Category"
             sx={{ borderRadius: '8px' }}
           >
@@ -148,8 +145,8 @@ export default function App() {
         <FormControl size="small" sx={{ minWidth: 100 }}>
           <InputLabel>View Limit</InputLabel>
           <Select 
-            value={limit} 
-            onChange={(e) => { setLimit(e.target.value); setPage(1); }} 
+            value={pageSize} 
+            onChange={(e) => { setPageSize(e.target.value); setPageIndex(1); }} 
             label="View Limit"
             sx={{ borderRadius: '8px' }}
           >
@@ -161,19 +158,18 @@ export default function App() {
         </FormControl>
       </Box>
 
-      {/* Clean Box Layout Stack — Eliminates item attribute errors completely */}
       <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, width: '100%' }}>
-        {notifications.length === 0 ? (
+        {items.length === 0 ? (
           <Card sx={{ textAlign: 'center', p: 4, borderRadius: '12px', border: '1px dashed #ccc' }}>
             <Typography color="textSecondary">No notifications found matching current query bounds.</Typography>
           </Card>
         ) : (
-          notifications.map((item) => {
-            const isUnread = !viewedIds.has(item.ID);
+          items.map((row) => {
+            const isUnread = !readIds.has(row.ID);
             return (
               <Card 
-                key={item.ID}
-                onClick={() => markAsRead(item.ID)}
+                key={row.ID}
+                onClick={() => updateReadState(row.ID)}
                 elevation={isUnread ? 2 : 0}
                 sx={{ 
                   cursor: 'pointer',
@@ -189,20 +185,19 @@ export default function App() {
                 <CardContent sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', p: '16px !important' }}>
                   <Box sx={{ pr: 2 }}>
                     <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.5 }}>
-                      <Typography variant="caption" fontWeight="bold" color={item.Type === 'Placement' ? 'error.main' : 'primary.main'}>
-                        {item.Type.toUpperCase()}
+                      <Typography variant="caption" fontWeight="bold" color={row.Type === 'Placement' ? 'error.main' : 'primary.main'}>
+                        {row.Type.toUpperCase()}
                       </Typography>
                       {isUnread && (
                         <Chip label="NEW" size="small" color="primary" sx={{ height: '16px', fontSize: '9px', fontWeight: 'bold' }} />
                       )}
                     </Box>
                     <Typography variant="body1" sx={{ fontWeight: isUnread ? '600' : '400', color: isUnread ? '#212121' : '#616161' }}>
-                      {item.Message}
+                      {row.Message}
                     </Typography>
                   </Box>
-                  {/* Fixed styling rule: whiteSpace placement handled cleanly inside the sx container */}
                   <Typography variant="caption" color="textSecondary" sx={{ whiteSpace: 'nowrap' }}>
-                    {item.Timestamp}
+                    {row.Timestamp}
                   </Typography>
                 </CardContent>
               </Card>
@@ -214,8 +209,8 @@ export default function App() {
       <Box sx={{ display: 'flex', justifyContent: 'center', mt: 5 }}>
         <Pagination 
           count={5} 
-          page={page} 
-          onChange={(e, value) => setPage(value)} 
+          page={pageIndex} 
+          onChange={(e, val) => setPageIndex(val)} 
           color="primary" 
           size="medium"
           sx={{ '& .MuiPaginationItem-root': { borderRadius: '8px' } }}
