@@ -65,3 +65,9 @@ To maintain fast response times at scale, the architecture will implement:
 ```sql
 INSERT INTO notifications (id, student_id, notification_type, message, is_read, created_at)
 VALUES ('4471c9c6-211d-452e-9258-4c9f464d88a2', 'a23126510169', 'Result', 'internal', false, NOW());
+
+# Stage 3
+
+### 1. Analysis of the Developer's Query
+* **Query Evaluated:** ```sql
+  SELECT * FROM notifications WHERE studentID = 1042 AND isRead = false ORDER BY createdAt ASC;
