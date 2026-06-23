@@ -1,184 +1,226 @@
 # Notification System Design
-# Stage 1
-### 1. Core Notification Actions Supported
-This platform supports two distinct actions to handle user interaction streams seamlessly:
-* **Fetch Alerts:** Retrieve chronological lists of historical unread campus entries.
-* **Acknowledge Status:** Update an individual notification entity to prevent redundant views.
-### 2. REST API Design Contracts
-
-#### A. Retrieve Notifications Array
-* **Method:** `GET`
-* **Route:** `/api/v1/notifications`
-* **Request Headers:**
-  ```json
-  {
-    "Authorization": "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
-    "Content-Type": "application/json"
-  }
-
-# Stage 2
-
-### 1. Persistent Storage Selection & Justification
-* **Database Choice:** **PostgreSQL** (Relational Database Management System)
-* **Justification:** Relational storage is selected due to the clear entity-relationship mapping between university students and incoming notifications. PostgreSQL handles complex indexing structures (like B-Tree composite indices) with high efficiency, enforces strong data integrity via foreign key constraints, and natively supports transactional isolation guarantees ($ACID$) required to prevent race conditions during heavy write bursts.
 
 ---
 
-### 2. Relational Database Schema Architecture
+## Stage 1 — Core Notification Actions
 
-#### Table 1: `students`
-Tracks student identity attributes across the campus directory.
-* `student_id` (VARCHAR / UUID, PRIMARY KEY): Unique identifier.
-* `name` (VARCHAR, NOT NULL): Full name of the candidate.
-* `email` (VARCHAR, UNIQUE, NOT NULL): Official university email.
+The system needs to handle two basic things: letting users pull their unread notifications, and letting them mark a notification as read. Keeping these as separate operations makes the API cleaner and easier to extend later.
 
-#### Table 2: `notifications`
-Stores distinct alert records routed to target recipients.
-* `id` (VARCHAR / UUID, PRIMARY KEY): Unique notification ID.
-* `student_id` (VARCHAR / UUID, FOREIGN KEY references `students(student_id)`): Recipient identifier.
-* `notification_type` (VARCHAR / ENUM): Constrained to `Event`, `Result`, or `Placement`.
-* `message` (TEXT, NOT NULL): Detail payload string of the notice.
-* `is_read` (BOOLEAN, DEFAULT false): Tracks read status state.
-* `created_at` (TIMESTAMP, DEFAULT NOW()): Generation date and time stamp.
+### Supported Actions
 
----
+- **Fetch Notifications** — returns a list of unread alerts for a student, ordered from oldest to newest.
+- **Mark as Read** — updates a single notification record so it stops showing up as unread.
 
-### 3. Data Volume Scaling Challenges
-As the dataset expands over time to scale past 50,000 students and millions of archived notifications, three major performance bottlenecks will emerge:
-1. **Read Performance Degradation:** Executing lookup filters on deep, non-indexed tables forces the database engine to perform costly full table scans, spiking CPU usage and slowing query execution times.
-2. **Write Lock Contention:** Massive write loops (such as a generic "Notify All" campus alert broadcast) can log lock records inside the same database page block, blocking concurrent read operations.
-3. **Index Overhead Expansion:** Maintaining high-cardinality indices across millions of rows dramatically slows down `INSERT` operations because the database engine must recalculate the index trees on every write.
+### REST Endpoints
 
----
+#### GET /api/v1/notifications
 
-### 4. Enterprise Mitigation Solutions
-To maintain fast response times at scale, the architecture will implement:
-* **Composite B-Tree Indexing:** Implement focused indices covering the exact query keys (e.g., combining `student_id`, `is_read`, and `created_at`) to narrow lookup boundaries to logarithmic space ($O(\log N)$).
-* **Horizontal Table Partitioning:** Partition the `notifications` table into time-based logical shards (e.g., monthly partitions) based on the `created_at` value. Queries searching for recent records only scan the current month's partition instead of the whole database.
-* **Read-Replica Architecture:** Deploy a primary database instance dedicated exclusively to handling transaction writes (`INSERT`, `PATCH`), while distributing `GET` lookups across horizontally scaled read-replicas.
+Retrieves the notification list. The request needs an Authorization header carrying a Bearer token, plus a Content-Type of `application/json`. Pretty standard JWT-based auth.
+
+```http
+GET /api/v1/notifications
+Authorization: Bearer <token>
+Content-Type: application/json
+```
+
+#### PATCH /api/v1/notifications/:id/read
+
+Marks a specific notification as read. The notification ID goes in the URL — no request body needed, the action is implicit from the route itself.
 
 ---
 
-### 5. Production Database Queries
+## Stage 2 — Database Design
 
-#### A. Insert a New Notification Record
+PostgreSQL is the right call here. The data has a pretty clear relational shape — students and their notifications — and Postgres handles that well. You also get proper foreign key constraints, composite indexes, and ACID guarantees, which matter a lot when you're doing a lot of writes at once (think: a campus-wide alert going out to everyone simultaneously).
+
+### Schema
+
+#### `students`
+
+| Column | Type | Notes |
+|---|---|---|
+| `student_id` | UUID, PRIMARY KEY | Unique identifier |
+| `name` | VARCHAR, NOT NULL | Full name |
+| `email` | VARCHAR, UNIQUE, NOT NULL | University email |
+
+#### `notifications`
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | UUID, PRIMARY KEY | Unique notification ID |
+| `student_id` | UUID, FOREIGN KEY → students | Recipient |
+| `notification_type` | ENUM | `Event`, `Result`, or `Placement` |
+| `message` | TEXT, NOT NULL | Notification content |
+| `is_read` | BOOLEAN, DEFAULT false | Read/unread status |
+| `created_at` | TIMESTAMP, DEFAULT NOW() | Creation time |
+
+### Scaling Concerns
+
+Once you're past 50k students and millions of notification rows, a few things start to hurt:
+
+1. **Full table scans** — if the right columns aren't indexed, every unread lookup becomes painfully slow.
+2. **Write contention** — bulk inserts (e.g. notifying the entire campus) can block concurrent reads on the same pages.
+3. **Index bloat** — high-cardinality indexes get expensive to maintain as the table grows. Every insert touches the index tree.
+
+### Mitigation Strategies
+
+- **Composite index** on `(student_id, is_read, created_at)` — narrows query scope significantly.
+- **Monthly partitioning** on `created_at` — recent queries only scan the current partition instead of the full table.
+- **Read replicas** — offload all SELECT queries to replicas; keep writes on the primary.
+
+### Sample Insert
+
 ```sql
 INSERT INTO notifications (id, student_id, notification_type, message, is_read, created_at)
-VALUES ('4471c9c6-211d-452e-9258-4c9f464d88a2', 'a23126510169', 'Result', 'internal', false, NOW());
+VALUES (
+  '4471c9c6-211d-452e-9258-4c9f464d88a2',
+  'a23126510169',
+  'Result',
+  'Your result for Semester 4 has been published.',
+  false,
+  NOW()
+);
 ```
-# Stage 3
 
-### 1. Analysis of the Developer's Query
-* **Query Evaluated:** 
+---
+
+## Stage 3 — Query Review
+
+Here's the query the developer wrote:
+
+```sql
+SELECT * FROM notifications
+WHERE studentID = 1042 AND isRead = false
+ORDER BY createdAt ASC;
 ```
-sql
-  SELECT * FROM notifications 
-  WHERE studentID = 1042 AND isRead = false 
-  ORDER BY createdAt ASC;
 
-  ```
+### Issues
 
-# Stage 4
+1. **Column naming mismatch** — the schema uses snake_case (`student_id`, `is_read`, `created_at`). Using camelCase here will throw an error in Postgres unless the columns were quoted during creation, which is bad practice.
+2. **`SELECT *` in production** — fine for quick testing, but you only need a handful of fields. Pulling everything wastes bandwidth.
+3. **No `LIMIT` clause** — if a student has thousands of unread notifications, this query returns all of them in one shot.
 
-### 1. The Real-Time Cache Strategy Recommendation
-* **Proposed Infrastructure Layer:** **In-Memory Caching utilizing Redis**.
-* **Implementation Strategy:** Instead of querying the core relational database on every single page load, the system caches the active unread notification payload array in memory. The Redis cache instance stores the dataset using a structured key mapped directly to the individual student ID: `student:cache:a23126510169:notifications`.
+### Corrected Query
 
----
+```sql
+SELECT id, notification_type, message, created_at
+FROM notifications
+WHERE student_id = 'a23126510169'
+  AND is_read = false
+ORDER BY created_at ASC
+LIMIT 20 OFFSET 0;
+```
 
-### 2. Deep-Dive Architectural Trade-offs
-
-#### A. The Advantages (Pros)
-* **Sub-Millisecond Retrieval Speed:** Moving queries from physical disk-based table space into volatile RAM memory drops notification read latency from hundreds of milliseconds down to sub-10 milliseconds, improving the user experience.
-* **Database Workload Isolation:** Intercepting repetitive read requests at the cache layer prevents the primary relational database from freezing up during peak high-traffic campus rush windows (e.g., when results are released simultaneously).
-
-#### B. The Disadvantages & Mitigation (Cons)
-* **Cache Invalidation Complexity:** Introducing a cache introduces the risk of stale data. If an admin posts a new notification, the student will not see it until the cache expires or is updated.
-* **Mitigation (Cache-Aside Pattern):** The backend will explicitly trigger a cache eviction (`DEL student:cache:student_id:notifications`) immediately inside the notification generation pipeline whenever a new record is created. This forces the next page load to perform a clean database fetch and rebuild a fresh cache copy.
+This version matches the actual column names, only fetches what the UI needs, and adds pagination so you're not dumping the entire table to the client.
 
 ---
 
-# Stage 5
+## Stage 4 — Caching with Redis
 
-### 1. Systemic Shortcomings of the Synchronous Code Block
-The developer's linear looping pseudocode contains two critical flaws that will cause catastrophic failures when hitting 50,000 student records:
-1. **Thread-Blocking Synchronous Throttling:** Processing external email SMTP handshakes and write operations inline inside a single `for` loop blocks the application process. If a single execution takes 200ms, running it 50,000 times will lock up the server for nearly **3 hours**, causing the entire system to time out.
-2. **Lack of Fault Tolerance & Atomicity:** If an external third-party email client API fails midway (e.g., at the 200th student), the execution crashes completely. There is no mechanism to recover, retry, or track state, leaving the system in an inconsistent state where some students receive the alert and others do not.
+Hitting the database on every single page load for the notification list is wasteful, especially during peak times like when results drop. Redis sits in front of the DB and keeps the unread notification array in memory, keyed by student ID.
+
+```
+Key format: student:cache:<student_id>:notifications
+```
+
+### Why This Helps
+
+- **Speed** — in-memory lookups happen in under 10ms versus potentially hundreds of milliseconds for a DB query with joins.
+- **DB relief** — during traffic spikes, most requests never reach Postgres at all.
+
+### The Trade-off: Stale Data
+
+The obvious risk is that the cache can go out of sync. If an admin posts a new notification, the student won't see it until the cache refreshes. The fix is to invalidate the cache immediately whenever a new notification is created:
+
+```
+DEL student:cache:<student_id>:notifications
+```
+
+This forces the next page load to rebuild from the database — it's the Cache-Aside pattern. Simple and effective for this use case.
 
 ---
 
-### 2. High-Throughput Asynchronous Redesign
-To achieve true horizontal scalability, we isolate the execution from the request cycle by decoupling the operation using an asynchronous background **Message Queue System** (such as RabbitMQ, Apache Kafka, or Amazon SQS).
+## Stage 5 — Bulk Notification Delivery
 
-#### Optimized Non-Blocking Pseudocode Blueprint
+The naive approach — looping through 50,000 students and sending each email synchronously — is a non-starter. At even 200ms per send, that's close to 3 hours of a blocked server thread. One SMTP failure midway crashes the whole thing and you have no idea who got the alert.
+
+### The Fix: Message Queues
+
+The solution is to decouple the send operation from the request cycle entirely. The API endpoint publishes a job payload to a message queue (RabbitMQ, Kafka, SQS — whatever fits the stack) and immediately returns HTTP 202 to the caller. Worker processes pick up the job in the background and handle delivery concurrently.
+
+#### Publisher (API Handler)
+
 ```python
-# 1. API Endpoint Handler (Publisher - Instant Non-Blocking Handshake)
-function notify_all(student_ids: array, message: string):
-    # Package parameters into an immutable background job payload
-    job_payload = {
+function notify_all(student_ids, message):
+    job = {
         "recipients": student_ids,
         "alert_text": message,
         "timestamp": get_iso_timestamp()
     }
-    
-    # Offload the payload onto an enterprise message exchange immediately
-    message_queue.publish("broadcast_notification_exchange", job_payload)
-    
-    # Instantly return HTTP 202 Accepted to the client dashboard
-    return HTTP_STATUS_202_ACCEPTED
+    message_queue.publish("broadcast_notification_exchange", job)
+    return HTTP_202_ACCEPTED
+```
 
-# 2. Asynchronous Worker Daemon (Consumer - Highly Concurrent Processing)
-function process_broadcast_exchange_worker(job_payload):
-    # Distribute operations across a highly concurrent parallel worker pool
-    for student_id in job_payload.recipients:
-        worker_pool.submit(execute_reliable_delivery, student_id, job_payload.alert_text)
+#### Consumer (Worker Daemon)
 
-function execute_reliable_delivery(student_id, message):
+```python
+function process_broadcast_worker(job):
+    for student_id in job.recipients:
+        worker_pool.submit(deliver, student_id, job.alert_text)
+
+function deliver(student_id, message):
     try:
-        # Step A: Perform persistent database record entry
         save_to_db(student_id, message)
-        
-        # Step B: Push real-time event to active client via SSE stream layer
         push_to_app(student_id, message)
-        
-        # Step C: Dispatch external notification with isolated error retry policies
         dispatch_email_with_retry(student_id, message, max_retries=3)
-        
-    except ExternalNetworkException as network_error:
-        # Route isolated network failures straight to a Dead-Letter Queue (DLQ) for retries
+    except NetworkException as err:
         dead_letter_queue.push({
             "student_id": student_id,
             "message": message,
-            "error": str(network_error),
-            "step": "email_dispatch"
+            "error": str(err)
         })
+```
+
+Failed deliveries go to a Dead Letter Queue instead of crashing the worker. You can inspect the DLQ, fix the issue, and retry — without touching the successful sends.
 
 ---
-```
-# Stage 6
 
-### 1. Algorithmic Approach Strategy
-The Priority Inbox sorting engine processes the raw notification stream array utilizing a multi-level comparator matrix. Notifications are assigned quantitative categorical values based on the product manager's weight directives (`Placement` = 3, `Result` = 2, `Event` = 1). The algorithm evaluates the relative weights of elements sequentially; if weights are unequal, the higher-value notice moves to the front of the array. If a tier match occurs, a fallback comparator calculates the epoch delta between dates via their `Timestamp` metadata keys to enforce strict chronological recency order.
+## Stage 6 — Priority Inbox Sorting
 
-### 2. High-Efficiency Real-Time Stream Maintenance Optimization
-To maintain the Top 10 priority rows efficiently as a continuous loop of new events stream in, re-sorting the entire collection at $\mathcal{O}(N \log N)$ is highly inefficient. 
+Notifications aren't all equal. A placement alert matters more than an event reminder, so the UI needs to reflect that. The priority weights are:
 
-Instead, the production system utilizes a bounded **Min-Heap (Priority Queue) data structure capped at a maximum capacity of $K = 10$ elements**:
-* **Stream Insertion Logic:** For every newly arriving notification string, compute its composite priority value ($Weight + Timestamp$).
-* **Comparison Loop:** If the heap contains fewer than 10 entries, push the record onto the heap immediately. If the heap is full, compare the incoming element with the root node of the Min-Heap (which represents the lowest priority element currently in our top-10 list).
-* **Eviction Strategy:** If the new arrival possesses a higher score than the lowest priority item at the root, the root node is ejected, and the new item is inserted into the heap structure. 
-* **Algorithmic Complexity:** This optimization reduces computation cost per incoming network payload item down to a constant bound of **$\mathcal{O}(\log 10) \rightarrow \mathcal{O}(1)$ time complexity**, completely insulating the server CPU from memory freezes regardless of total historical volume size.
+| Type | Weight |
+|---|---|
+| Placement | 3 |
+| Result | 2 |
+| Event | 1 |
 
-```
-```
+When two notifications share the same type, the more recent one should appear first (sorted by timestamp descending).
 
-# Stage 7
+### Efficient Top-10 Maintenance
 
-### 1. Frontend Architecture & State Management Approach
-The React application architecture isolates state management into three core operational layers: network synchronization hooks, view filter registers, and user interaction trackers. To satisfy the performance rules, notifications are tracked via an optimization state using an explicit local storage-backed `Set` object of viewed `ID` hashes. This allows the UI to instantly distinguish between brand-new unread alerts (rendered with a bold interactive high-contrast indicator bar) and already acknowledged rows in constant $O(1)$ time complexity without forcing redundant database updates.
+Re-sorting the entire list every time a new notification arrives is O(N log N) and doesn't scale. A better approach is a **min-heap capped at 10 elements**:
 
-### 2. Edge-Case Stability & Filter Pagination Flow
-The interface addresses data cluttering boundaries by combining server-side pagination query parameters (`page`, `limit`, `notification_type`) with an adaptive client-side sorting algorithm wrapper. When a student toggles into the **Priority Inbox** view, the component captures the active paginated network array and processes it through the priority matrix weight calculator. This ensures that even under restricted network bandwidth, high-priority placement updates bubble up seamlessly to the top of the viewport display across both desktop layouts and mobile view ports.
+1. New notification arrives → compute its priority score.
+2. If the heap has fewer than 10 items, push it straight in.
+3. If the heap is full, compare against the root (the lowest priority item currently in the top 10). If the new one scores higher, pop the root and push the new item in.
 
-### 3. Integrated Client-Side Call Stack Logging Matrix
-Custom logging handlers are bound directly inside the user request life-cycle hooks. Inbound API stream updates fire off `info` status notifications to the remote logging collection endpoint, while unexpected network dropouts or validation failures trigger explicit `error` logs containing descriptive contextual data fields.
+This keeps insertion cost at O(log 10), which is effectively constant regardless of how many total notifications exist. The heap always holds the current top 10.
+
+---
+
+## Stage 7 — Frontend Architecture
+
+The React layer splits responsibility across three areas: network data fetching, filter/view state, and interaction tracking (read/unread).
+
+### Read State Tracking
+
+To avoid redundant PATCH requests on every render, the component tracks which notification IDs the user has already seen using a `Set` in local state. Checking membership is O(1), so the read/unread distinction in the UI stays instant. Unread items get bold, high-contrast styling; acknowledged ones are visually muted.
+
+### Priority View + Pagination
+
+Server-side pagination (`page`, `limit`, `notification_type`) handles data volume. When the user switches to Priority Inbox, the current page's data gets passed through the priority weight comparator client-side. This way, even on slow connections, the highest-priority items bubble to the top of whatever page the student is on — across both desktop and mobile layouts.
+
+### Logging
+
+Request hooks fire `info`-level logs on successful API responses and `error`-level logs on failures. Each error log includes enough context (student ID, endpoint, response code) to be actionable. These ship to a remote logging endpoint rather than staying local, so you can monitor issues across sessions.
