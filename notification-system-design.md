@@ -155,6 +155,22 @@ function execute_reliable_delivery(student_id, message):
 
 ---
 ```
+# Stage 6
+
+### 1. Algorithmic Approach Strategy
+The Priority Inbox sorting engine processes the raw notification stream array utilizing a multi-level comparator matrix. Notifications are assigned quantitative categorical values based on the product manager's weight directives (`Placement` = 3, `Result` = 2, `Event` = 1). The algorithm evaluates the relative weights of elements sequentially; if weights are unequal, the higher-value notice moves to the front of the array. If a tier match occurs, a fallback comparator calculates the epoch delta between dates via their `Timestamp` metadata keys to enforce strict chronological recency order.
+
+### 2. High-Efficiency Real-Time Stream Maintenance Optimization
+To maintain the Top 10 priority rows efficiently as a continuous loop of new events stream in, re-sorting the entire collection at $\mathcal{O}(N \log N)$ is highly inefficient. 
+
+Instead, the production system utilizes a bounded **Min-Heap (Priority Queue) data structure capped at a maximum capacity of $K = 10$ elements**:
+* **Stream Insertion Logic:** For every newly arriving notification string, compute its composite priority value ($Weight + Timestamp$).
+* **Comparison Loop:** If the heap contains fewer than 10 entries, push the record onto the heap immediately. If the heap is full, compare the incoming element with the root node of the Min-Heap (which represents the lowest priority element currently in our top-10 list).
+* **Eviction Strategy:** If the new arrival possesses a higher score than the lowest priority item at the root, the root node is ejected, and the new item is inserted into the heap structure. 
+* **Algorithmic Complexity:** This optimization reduces computation cost per incoming network payload item down to a constant bound of **$\mathcal{O}(\log 10) \rightarrow \mathcal{O}(1)$ time complexity**, completely insulating the server CPU from memory freezes regardless of total historical volume size.
+
+```
+```
 
 # Stage 7
 
