@@ -155,7 +155,8 @@ function execute_reliable_delivery(student_id, message):
 
 ---
 ```
-#Stage 7
+
+# Stage 7
 
 ### 1. Frontend Architecture & State Management Approach
 The React application architecture isolates state management into three core operational layers: network synchronization hooks, view filter registers, and user interaction trackers. To satisfy the performance rules, notifications are tracked via an optimization state using an explicit local storage-backed `Set` object of viewed `ID` hashes. This allows the UI to instantly distinguish between brand-new unread alerts (rendered with a bold interactive high-contrast indicator bar) and already acknowledged rows in constant $O(1)$ time complexity without forcing redundant database updates.
