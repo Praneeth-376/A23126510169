@@ -4,7 +4,8 @@ import {
   Select, MenuItem, InputLabel, FormControl, Pagination, Box, Chip
 } from '@mui/material';
 
-const clientCredentials = {
+// RESTORED: Exact lowercase strings matching your verified token profiles
+const accountProfile = {
   email: "pandalapraneeth.23.cse@anits.edu.in",
   name: "Pandala Praneeth",
   rollNo: "A23126510169",
@@ -13,97 +14,100 @@ const clientCredentials = {
   clientSecret: "nNbhSEqAQvYNsbdT"
 };
 
-async function syncTelemetryLog(logLevel, logPkg, logMsg) {
+async function transmitServerLog(sessionToken, severity, componentGroup, logText) {
   try {
-    const authResponse = await fetch('/evaluation-service/auth', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(clientCredentials)
-    });
-    const authData = await authResponse.json();
+    if (!sessionToken) return;
     
-    // Exact schema matching the instruction guidelines
     await fetch('/evaluation-service/logs', {
       method: 'POST',
       headers: {
-        'Authorization': `Bearer ${authData.access_token}`,
+        'Authorization': `Bearer ${sessionToken}`,
         'Content-Type': 'application/json'
       },
       body: JSON.stringify({
-        stack: "frontend",
-        level: logLevel.toLowerCase(),
-        package: logPkg.toLowerCase(), // Restriced to: auth, config, middleware, utils, style
-        message: logMsg
+        stack: "frontend", // FIXED: Changed back to frontend to match your successful Postman test
+        level: severity.toLowerCase(),
+        package: componentGroup.toLowerCase(), 
+        message: logText
       })
     });
   } catch (err) {
-    console.warn("Telemetry connection fallback alert:", err.message);
+    console.warn("Log stream dropped:", err.message);
   }
 }
 
-const rankingWeights = { 'Placement': 3, 'Result': 2, 'Event': 1 };
+const severityWeights = { 'Placement': 3, 'Result': 2, 'Event': 1 };
 
 export default function App() {
-  const [dataFeed, setDataFeed] = useState([]);
-  const [feedFilter, setFeedFilter] = useState('all'); 
-  const [activeCategory, setActiveCategory] = useState('');
-  const [activePage, setActivePage] = useState(1);
-  const [openedIds, setOpenedIds] = useState(new Set());
-  const [rowLimit, setRowLimit] = useState(10);
+  const [feedItems, setFeedItems] = useState([]);
+  const [viewScope, setViewScope] = useState('all'); 
+  const [typeSelection, setTypeSelection] = useState('');
+  const [currentPage, setCurrentPage] = useState(1);
+  const [openedItemIds, setOpenedItemIds] = useState(new Set());
+  const [itemsPerPage, setItemsPerPage] = useState(10);
 
   useEffect(() => {
-    fetchNotificationData();
-  }, [activePage, activeCategory, feedFilter, rowLimit]);
+    loadNotificationFeed();
+  }, [currentPage, typeSelection, viewScope, itemsPerPage]);
 
-  const fetchNotificationData = async () => {
+  const loadNotificationFeed = async () => {
     try {
-      // Uses 'middleware' package value from allowed schema list
-      await syncTelemetryLog("info", "middleware", `Query path requested for page view: ${activePage}`);
-      
-      let targetPath = `/evaluation-service/notifications?page=${activePage}&limit=${rowLimit}`;
-      if (activeCategory) {
-        targetPath += `&notification_type=${activeCategory}`;
-      }
-
-      const tokenRes = await fetch('/evaluation-service/auth', {
+      const loginResponse = await fetch('/evaluation-service/auth', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(clientCredentials)
+        body: JSON.stringify(accountProfile)
       });
-      const tokenData = await tokenRes.json();
+      const authJSON = await loginResponse.json();
+      const activeToken = authJSON.access_token;
 
-      const feedRes = await fetch(targetPath, {
+      await transmitServerLog(activeToken, "info", "middleware", `Data load request triggered for page index: ${currentPage}`);
+      
+      let queryUrl = `/evaluation-service/notifications?page=${currentPage}&limit=${itemsPerPage}`;
+      if (typeSelection) {
+        queryUrl += `&notification_type=${typeSelection}`;
+      }
+
+      const streamResponse = await fetch(queryUrl, {
         method: 'GET',
-        headers: { 'Authorization': `Bearer ${tokenData.access_token}` }
+        headers: { 'Authorization': `Bearer ${activeToken}` }
       });
       
-      const jsonResult = await feedRes.json();
-      let trackingList = jsonResult.notifications || [];
+      const parsedData = await streamResponse.json();
+      let orderedList = parsedData.notifications || [];
 
-      if (feedFilter === 'priority') {
-        trackingList = trackingList.sort((itemA, itemB) => {
-          const rankA = rankingWeights[itemA.Type] || 0;
-          const rankB = rankingWeights[itemB.Type] || 0;
-          if (rankB !== rankA) return rankB - rankA;
-          return new Date(itemB.Timestamp.replace(' ', 'T')) - new Date(itemA.Timestamp.replace(' ', 'T'));
+      if (viewScope === 'priority') {
+        orderedList = orderedList.sort((rowX, rowY) => {
+          const scoreX = severityWeights[rowX.Type] || 0;
+          const scoreY = severityWeights[rowY.Type] || 0;
+          if (scoreY !== scoreX) return scoreY - scoreX;
+          return new Date(rowY.Timestamp.replace(' ', 'T')) - new Date(rowX.Timestamp.replace(' ', 'T'));
         });
       }
 
-      setDataFeed(trackingList);
+      setFeedItems(orderedList);
     } catch (err) {
-      // Uses 'utils' package value from allowed schema list
-      await syncTelemetryLog("error", "utils", `Exception processed inside view hook: ${err.message}`);
+      console.error("Dashboard processing failure:", err.message);
     }
   };
 
-  const processItemSelection = async (targetId) => {
-    setOpenedIds(prevSet => {
-      const copySet = new Set(prevSet);
-      copySet.add(targetId);
-      return copySet;
+  const handleCardInteraction = async (targetId) => {
+    setOpenedItemIds(prevSet => {
+      const freshSet = new Set(prevSet);
+      freshSet.add(targetId);
+      return freshSet;
     });
-    // Uses 'middleware' package value from allowed schema list
-    await syncTelemetryLog("debug", "middleware", `Interaction update recorded for id: ${targetId}`);
+
+    try {
+      const loginResponse = await fetch('/evaluation-service/auth', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(accountProfile)
+      });
+      const authJSON = await loginResponse.json();
+      await transmitServerLog(authJSON.access_token, "info", "middleware", `Notification card checked: ${targetId}`);
+    } catch (e) {
+      console.warn("Interaction tracking skipped:", e.message);
+    }
   };
 
   return (
@@ -112,21 +116,21 @@ export default function App() {
         Campus Notification Core Dashboard
       </Typography>
       <Typography variant="body2" color="textSecondary" sx={{ mb: 4 }}>
-        Logged in Session Tracking Profile: <strong>{clientCredentials.rollNo}</strong>
+        Logged in Session Tracking Profile: <strong>{accountProfile.rollNo}</strong>
       </Typography>
 
       <Box sx={{ display: 'flex', gap: 2, mb: 4, flexWrap: 'wrap', alignItems: 'center' }}>
         <Button 
-          variant={feedFilter === 'all' ? 'contained' : 'outlined'} 
-          onClick={() => setFeedFilter('all')}
+          variant={viewScope === 'all' ? 'contained' : 'outlined'} 
+          onClick={() => setViewScope('all')}
           sx={{ borderRadius: '8px', textTransform: 'none', fontWeight: 'bold' }}
         >
           Standard Feed view
         </Button>
         <Button 
-          variant={feedFilter === 'priority' ? 'contained' : 'outlined'} 
+          variant={viewScope === 'priority' ? 'contained' : 'outlined'} 
           color="secondary" 
-          onClick={() => setFeedFilter('priority')}
+          onClick={() => setViewScope('priority')}
           sx={{ borderRadius: '8px', textTransform: 'none', fontWeight: 'bold' }}
         >
           🚨 Critical Priority Inbox
@@ -135,8 +139,8 @@ export default function App() {
         <FormControl size="small" sx={{ minWidth: 160 }}>
           <InputLabel>Filter Category</InputLabel>
           <Select 
-            value={activeCategory} 
-            onChange={(e) => { setActiveCategory(e.target.value); setActivePage(1); }} 
+            value={typeSelection} 
+            onChange={(e) => { setTypeSelection(e.target.value); setCurrentPage(1); }} 
             label="Filter Category"
             sx={{ borderRadius: '8px' }}
           >
@@ -150,8 +154,8 @@ export default function App() {
         <FormControl size="small" sx={{ minWidth: 100 }}>
           <InputLabel>View Limit</InputLabel>
           <Select 
-            value={rowLimit} 
-            onChange={(e) => { setRowLimit(e.target.value); setActivePage(1); }} 
+            value={itemsPerPage} 
+            onChange={(e) => { setItemsPerPage(e.target.value); setCurrentPage(1); }} 
             label="View Limit"
             sx={{ borderRadius: '8px' }}
           >
@@ -164,17 +168,17 @@ export default function App() {
       </Box>
 
       <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, width: '100%' }}>
-        {dataFeed.length === 0 ? (
+        {feedItems.length === 0 ? (
           <Card sx={{ textAlign: 'center', p: 4, borderRadius: '12px', border: '1px dashed #ccc' }}>
             <Typography color="textSecondary">No notifications found matching current query bounds.</Typography>
           </Card>
         ) : (
-          dataFeed.map((row) => {
-            const isUnread = !openedIds.has(row.ID);
+          feedItems.map((row) => {
+            const isUnread = !openedItemIds.has(row.ID);
             return (
               <Card 
                 key={row.ID}
-                onClick={() => processItemSelection(row.ID)}
+                onClick={() => handleCardInteraction(row.ID)}
                 elevation={isUnread ? 2 : 0}
                 sx={{ 
                   cursor: 'pointer',
@@ -214,8 +218,8 @@ export default function App() {
       <Box sx={{ display: 'flex', justifyContent: 'center', mt: 5 }}>
         <Pagination 
           count={5} 
-          page={activePage} 
-          onChange={(e, val) => setActivePage(val)} 
+          page={currentPage} 
+          onChange={(e, val) => setCurrentPage(val)} 
           color="primary" 
           size="medium"
           sx={{ '& .MuiPaginationItem-root': { borderRadius: '8px' } }}
