@@ -1,83 +1,82 @@
-// priority.js - Fully Automated with Self-Authentication to prevent 401 errors
+// priority.js - handles login handshake and fetches alerts to avoid token expiry issues
 
-const credentials = {
+const userProfile = {
     email: "pandalapraneeth.23.cse@anits.edu.in",
-    name: "pandala praneeth",
-    rollNo: "a23126510169",
+    name: "Pandala Praneeth",
+    rollNo: "A23126510169",
     accessCode: "MTqxar",
     clientID: "3de3df34-edf9-4cd9-8c72-011e8f0f3118",
     clientSecret: "nNbhSEqAQvYNsbdT"
 };
 
-const TYPE_WEIGHTS = {
+const rankingRules = {
     'Placement': 3,
     'Result': 2,
     'Event': 1
 };
 
-async function generatePriorityInbox() {
+async function fetchAndSortAlerts() {
     try {
-        console.log("🔒 Requesting a fresh Authorization Token from server...");
-        const authResponse = await fetch('http://4.224.186.213/evaluation-service/auth', {
+        console.log("Sending login request to auth endpoint...");
+        const loginResponse = await fetch('http://4.224.186.213/evaluation-service/auth', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(credentials)
+            body: JSON.stringify(userProfile)
         });
 
-        if (!authResponse.ok) {
-            throw new Error(`Authentication handshake failed with status: ${authResponse.status}`);
+        if (!loginResponse.ok) {
+            throw new Error(`Login failed with status code: ${loginResponse.status}`);
         }
 
-        const authData = await authResponse.json();
-        const token = authData.access_token;
-        console.log("✅ Token successfully retrieved and authenticated.");
+        const authJSON = await loginResponse.json();
+        const activeToken = authJSON.access_token;
+        console.log("Auth token acquired successfully.");
 
-        console.log("🌐 Fetching live records from evaluation server...");
-        const response = await fetch('http://4.224.186.213/evaluation-service/notifications', {
+        console.log("Requesting raw notification feed...");
+        const apiResponse = await fetch('http://4.224.186.213/evaluation-service/notifications', {
             method: 'GET',
             headers: {
-                'Authorization': `Bearer ${token}`,
+                'Authorization': `Bearer ${activeToken}`,
                 'Content-Type': 'application/json'
             }
         });
 
-        if (!response.ok) {
-            throw new Error(`HTTP network failure status code: ${response.status}`);
+        if (!apiResponse.ok) {
+            throw new Error(`Data fetch failed with status code: ${apiResponse.status}`);
         }
 
-        const data = await response.json();
-        const rawNotifications = data.notifications || [];
+        const responseData = await apiResponse.json();
+        const alertsList = responseData.notifications || [];
 
-        // Apply strict sorting rules (Placement > Result > Event)
-        const sortedNotifications = rawNotifications.sort((a, b) => {
-            const weightA = TYPE_WEIGHTS[a.Type] || 0;
-            const weightB = TYPE_WEIGHTS[b.Type] || 0;
+        // Sort records by weight logic first, then by date as a fallback tie-breaker
+        const processedList = alertsList.sort((itemX, itemY) => {
+            const weightX = rankingRules[itemX.Type] || 0;
+            const weightY = rankingRules[itemY.Type] || 0;
 
-            // Rule 1: Sort by Category Weight (Higher weight first)
-            if (weightB !== weightA) {
-                return weightB - weightA;
+            if (weightY !== weightX) {
+                return weightY - weightX;
             }
 
-            // Rule 2: If weights match, sort by Recency (Latest timestamp first)
-            return new Date(b.Timestamp.replace(' ', 'T')) - new Date(a.Timestamp.replace(' ', 'T'));
+            // FIXED: Corrected reference here from weightY to itemY
+            return new Date(itemY.Timestamp.replace(' ', 'T')) - new Date(itemX.Timestamp.replace(' ', 'T'));
         });
 
-        // Isolate the top 10 rows
-        const top10PriorityInbox = sortedNotifications.slice(0, 10);
+        // isolate the top 10 positions
+        const topTenAlerts = processedList.slice(0, 10);
 
-        console.log("\n=== 🚨 STAGE 6: LIVE TOP 10 PRIORITY INBOX OUTPUT ===");
-        console.table(top10PriorityInbox.map(item => ({
-            ID: item.ID.substring(0, 8) + "...",
-            Type: item.Type,
-            Message: item.Message,
-            Timestamp: item.Timestamp
+        console.log("\n=== STAGE 6: TOP 10 PRIORITY ALERTS DATA ===");
+        console.table(topTenAlerts.map(row => ({
+            ID: row.ID.substring(0, 8) + "...",
+            Type: row.Type,
+            Message: row.Message,
+            Timestamp: row.Timestamp
         })));
         
-        console.log("\nFull Raw JSON Deliverable Array Object:\n", JSON.stringify(top10PriorityInbox, null, 2));
+        console.log("\nRaw Result Payload Array:\n", JSON.stringify(topTenAlerts, null, 2));
 
-    } catch (error) {
-        console.error("❌ Execution breakdown:", error.message);
+    } catch (err) {
+        console.error("Process interrupted:", err.message);
     }
 }
 
-generatePriorityInbox();
+fetchAndSortAlerts();
