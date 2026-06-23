@@ -133,7 +133,7 @@ export default function App() {
           onClick={() => setViewScope('priority')}
           sx={{ borderRadius: '8px', textTransform: 'none', fontWeight: 'bold' }}
         >
-          🚨 Critical Priority Inbox
+          Critical Priority Inbox
         </Button>
 
         <FormControl size="small" sx={{ minWidth: 160 }}>
