@@ -71,6 +71,7 @@ VALUES ('4471c9c6-211d-452e-9258-4c9f464d88a2', 'a23126510169', 'Result', 'inter
 ### 1. Analysis of the Developer's Query
 * **Query Evaluated:** ```sql
   SELECT * FROM notifications WHERE studentID = 1042 AND isRead = false ORDER BY createdAt ASC;
+  ```
   # Stage 4
 
 ### 1. The Real-Time Cache Strategy Recommendation
